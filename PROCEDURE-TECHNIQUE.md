@@ -197,7 +197,7 @@ bitcoin-cli decoderawtransaction $(cat tx.hex)
 Diffusion, étape volontairement séparée.
 
 ```bash
-python3 pos_recover.py broadcast --tx tx.hex
+python3 pos_recover.py broadcast --tx tx.hex --context context.json
 ```
 
 ## 6. Vérification après diffusion

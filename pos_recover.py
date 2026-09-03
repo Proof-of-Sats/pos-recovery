@@ -19,7 +19,7 @@ Usage :
     python3 pos_recover.py fetch    --card TXID:VOUT --funding TXID:VOUT -o ctx.json   # en ligne
     python3 pos_recover.py build    --context ctx.json --dest bc1p... --feerate 5      # hors ligne
     python3 pos_recover.py verify   --tx tx.hex --context ctx.json                     # hors ligne
-    python3 pos_recover.py broadcast --tx tx.hex                                       # en ligne
+    python3 pos_recover.py broadcast --tx tx.hex --context ctx.json                    # en ligne
 """
 
 import argparse
@@ -973,7 +973,7 @@ def cmd_fetch(args):
             print("La construction reste sure sans cette donnee, "
                   "mais la position du sat ne pourra pas etre predite.", file=sys.stderr)
 
-    ctx = {"network": "mainnet", "card": card, "funding": fund}
+    ctx = {"network": args.network, "card": card, "funding": fund}
     if args.sat is not None:
         ctx["card"]["target_sat"] = args.sat
 
@@ -984,9 +984,15 @@ def cmd_fetch(args):
     print("Transferez ce fichier sur la machine hors ligne, puis lancez `build`.")
 
 
-def load_context(path):
+def load_context(path, expected_network=None):
     with open(path) as f:
         ctx = json.load(f)
+    network = ctx.get("network")
+    if network not in NETWORKS:
+        raise ValueError("contexte incomplet ou reseau invalide")
+    if expected_network is not None and network != expected_network:
+        raise Refusal("Le contexte est pour %s, mais la CLI est verrouillee sur %s."
+                      % (network, expected_network))
     for key in ("card", "funding"):
         if key not in ctx:
             raise ValueError("contexte incomplet : cle %r manquante" % key)
@@ -1425,7 +1431,7 @@ def sign_plan(plan, card_wif, fund_wif):
 
 
 def cmd_build(args):
-    ctx = load_context(args.context)
+    ctx = load_context(args.context, args.network)
     if "confirmed" in ctx["card"] and ctx["card"]["confirmed"] is False:
         print("Avertissement : l'UTXO de la carte n'est pas confirme.")
 
@@ -1490,18 +1496,21 @@ def cmd_build(args):
     print("hex ecrit dans : %s" % args.output)
     print("")
     print("Etapes suivantes :")
-    print("  1. python3 pos_recover.py verify --tx %s --context %s"
-          % (args.output, args.context))
+    print("  1. python3 pos_recover.py --network %s verify --tx %s --context %s"
+          % (args.network, args.output, args.context))
     print("  2. Controle croise : bitcoin-cli decoderawtransaction <hex>")
-    print("  3. Diffusion : python3 pos_recover.py broadcast --tx %s" % args.output)
+    print("  3. Diffusion : python3 pos_recover.py --network %s broadcast --tx %s --context %s"
+          % (args.network, args.output, args.context))
 
 
 
-def cmd_verify(args):
-    with open(args.tx) as f:
-        raw = bytes.fromhex(f.read().strip())
+def cmd_verify(args, verified_hex=None):
+    if verified_hex is None:
+        with open(args.tx) as f:
+            verified_hex = f.read().strip()
+    raw = bytes.fromhex(verified_hex)
     parsed = parse_tx(raw)
-    ctx = load_context(args.context)
+    ctx = load_context(args.context, args.network)
     card, fund = ctx["card"], ctx["funding"]
     card_spk = bytes.fromhex(card["scriptpubkey"])
     fund_spk = bytes.fromhex(fund["scriptpubkey"])
@@ -1521,6 +1530,10 @@ def cmd_verify(args):
         vin.append(t)
     vout = [TxOut(o["value"], o["spk"]) for o in parsed["vout"]]
     tx = Tx(vin, vout, parsed["version"], parsed["locktime"])
+
+    if tx.version != 2 or tx.locktime != 0:
+        raise SystemExit("VERIFICATION ECHOUEE : version 2 et locktime 0 requis. "
+                         "NE PAS DIFFUSER.")
 
     dest_spk = vout[0].spk if vout else b""
     print("txid : %s" % tx.txid())
@@ -1546,6 +1559,8 @@ def cmd_verify(args):
             continue
         sig, pub = i.witness
         try:
+            if not sig or sig[-1] != SIGHASH_ALL:
+                raise ValueError("SIGHASH_ALL absent")
             r, s = der_decode(sig[:-1])
             if not ecdsa_verify(pub, tx.sighash_p2wpkh(n), r, s):
                 print("  entree %d : SIGNATURE INVALIDE" % n)
@@ -1582,6 +1597,7 @@ def cmd_verify(args):
         else:
             print("Sat %s : %s. PROBLEME." % (_fmt_sat(target), where))
             raise SystemExit(2)
+    return {"hex": raw.hex(), "txid": tx.txid()}
 
 
 def spk_to_address(spk):
@@ -1600,13 +1616,18 @@ def spk_to_address(spk):
 def cmd_broadcast(args):
     with open(args.tx) as f:
         hexstr = f.read().strip()
-    parse_tx(bytes.fromhex(hexstr))  # refus de diffuser un hex illisible
+    # Revalidate the exact bytes that will be sent. This deliberately does not
+    # trust a previous invocation of `verify` or a mutable file on disk.
+    verified = cmd_verify(args, verified_hex=hexstr)
     if not args.yes:
         ans = input("Diffuser cette transaction sur le reseau ? Taper DIFFUSER : ").strip()
         if ans != "DIFFUSER":
             raise SystemExit("Abandon.")
-    txid = _http_post("%s/tx" % args.api, hexstr)
-    print("Diffuse. txid : %s" % txid.strip())
+    txid = _http_post("%s/tx" % args.api, verified["hex"]).strip()
+    if txid.lower() != verified["txid"].lower():
+        raise SystemExit("REFUS : le txid retourne par le serveur ne correspond pas "
+                         "au txid calcule localement.")
+    print("Diffuse. txid : %s" % txid)
     print("Verifiez la position du sat sur un indexeur ordinal avant de considerer "
           "l'operation terminee.")
 
@@ -1985,6 +2006,8 @@ def main(argv=None):
 
     br = sub.add_parser("broadcast", help="diffuser (EN LIGNE, etape separee)")
     br.add_argument("--tx", required=True)
+    br.add_argument("--context", required=True,
+                    help="contexte original, revalide juste avant la diffusion")
     br.add_argument("--api")
     br.add_argument("--yes", action="store_true")
     br.set_defaults(func=cmd_broadcast)

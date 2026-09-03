@@ -65,7 +65,8 @@ python3 pos_recover.py --network signet build \
 python3 pos_recover.py --network signet verify \
   --tx tx_signet.hex --context ctx_signet.json
 
-python3 pos_recover.py --network signet broadcast --tx tx_signet.hex
+python3 pos_recover.py --network signet broadcast \
+  --tx tx_signet.hex --context ctx_signet.json
 ```
 
 ### Critère de réussite

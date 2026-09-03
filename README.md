@@ -87,7 +87,8 @@ application.
 
 1. **Bitcoin network** — Mainnet is selected by default. Signet is available
    under Advanced options for developers and testing. The selected network is
-   locked for the session.
+   locked by the server for its complete lifetime. Restart the application to
+   select another network.
 2. **Card** — Enter the card outpoint and WIF. The application checks the UTXO,
    confirmation status, value, script type, and key ownership.
 3. **Xverse** — Connect the extension and visually verify the displayed
@@ -144,6 +145,10 @@ the transaction is finalized.
 - no cookies, `localStorage`, `sessionStorage`, or IndexedDB;
 - no persistent storage of the card WIF;
 - 30-minute sensitive-session expiry;
+- serialized state-changing requests, preventing concurrent operations from
+  interleaving shared recovery state or the engine's active network;
+- a server-side network lock that cannot be reset through `/api/network` and
+  remains in force when sensitive session state is erased;
 - no automatic broadcast;
 - exact final-byte comparison immediately before broadcast;
 - remote broadcast txid must match the locally calculated txid.
@@ -217,9 +222,26 @@ Before publishing a release for broad use, retain evidence for:
 ## Command-line engine
 
 `pos_recover.py` remains available for technical operators who prefer the CLI.
-Its historical commands include `fetch`, `build`, `verify`, `broadcast`,
+Its commands include `fetch`, `build`, `verify`, `broadcast`,
 `simulate`, `audit`, and `selftest`. The web application and CLI share the same
 transaction, cryptographic, and ordinal-invariant engine.
+
+Every context created by `fetch` records the selected `--network`. Subsequent
+`build`, `verify`, and `broadcast` operations reject a context whose network
+does not match the CLI's active `--network`.
+
+CLI broadcast requires both the signed transaction and its original context:
+
+```powershell
+python pos_recover.py --network mainnet broadcast --tx tx.hex --context context.json
+```
+
+Immediately before sending, `broadcast` reparses the exact bytes held in memory,
+revalidates both signatures and all recovery invariants against that context,
+and aborts before any network request if a check fails. It then sends those same
+bytes and rejects a txid response that differs from the locally calculated txid.
+Running `verify` separately remains useful for review, but its previous result
+is never trusted as authorization for a later broadcast.
 
 The CLI predates the Xverse PSBT interface and may present a different two-key
 workflow. Use the local web interface for the documented Xverse recovery path.
@@ -229,6 +251,8 @@ workflow. Use the local web interface for the documented Xverse recovery path.
 - `pos_recover.py` — transaction, PSBT, signature, and ordinal safety engine;
 - `pos_recover_ui.py` — local Xverse web interface and built-in user guide;
 - `test_pos_recover_psbt.py` — separated hostile PSBT and invariant tests;
+- `test_security_hardening.py` — CLI broadcast, network-context, server-lock,
+  and concurrency regression tests;
 - `PROCEDURE-TECHNIQUE.md` — technical rationale and manual verification;
 - `PROTOCOLE-DE-TEST.md` — empirical validation protocol;
 - `ARCHITECTURE-INTERFACE.md` — local-interface architecture;

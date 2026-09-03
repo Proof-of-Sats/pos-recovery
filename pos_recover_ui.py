@@ -8,7 +8,8 @@ import pos_recover as core
 
 TOKEN, NONCE = secrets.token_urlsafe(32), secrets.token_urlsafe(20)
 MAX_BODY, TTL = 2*1024*1024, 30*60
-STATE = {"network":"mainnet","ctx":None,"wallet":None,"plan":None,"psbt":None,"verified":None,"touched":time.monotonic()}
+STATE_LOCK = threading.RLock()
+STATE = {"network":"mainnet","network_locked":False,"ctx":None,"wallet":None,"plan":None,"psbt":None,"verified":None,"touched":time.monotonic()}
 LOGO_PATH = Path(__file__).resolve().parent / "img" / "raresatscards-logo.png"
 
 PAGE=r'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pos Recovery — Xverse</title>
@@ -37,25 +38,34 @@ GUIDE_PAGE=r'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta 
 <section><h2>Why Xverse is used</h2><p>Xverse is an Ordinals-aware Bitcoin wallet that clearly separates its Ordinals address from its payment address. This makes it well suited to receiving and managing rare sats while keeping the fee-paying funds separate.</p><p>Your Xverse wallet must be funded before recovery. Keep <strong>a few thousand sats</strong> on its payment address so the tool can select a confirmed payment UTXO, pay the mining fee, and return change above the dust limit. The exact amount required depends on the current fee rate; funding it with approximately 5,000 to 10,000 sats generally leaves a comfortable margin.</p><div class="callout">Do not use the Ordinals address as the funding source. The Ordinals address receives the protected card output; the Xverse payment address supplies the separate fee input.</div></section>
 <section><h2>What you need</h2><ul><li>The card outpoint in <span class="mono">TXID:VOUT</span> format.</li><li>The WIF private key revealed under the card seal.</li><li>The Xverse browser extension, unlocked and connected to the correct Bitcoin network.</li><li>A confirmed Xverse payment UTXO containing enough sats for fees and change.</li><li>Time to verify every address and transaction detail without rushing.</li></ul></section>
 <section><h2>Step-by-step instructions</h2>
-<div class="step"><span class="num">1</span><p><strong>Confirm the network.</strong> Use Mainnet for a real recovery. Signet is reserved for developers and technical testing. Once confirmed, the network is locked for the entire session.</p></div>
+<div class="step"><span class="num">1</span><p><strong>Confirm the network.</strong> Use Mainnet for a real recovery. Signet is reserved for developers and technical testing. Once confirmed, the server locks the network for its entire lifetime; changing a disabled browser control or calling the API directly cannot change it. Restart the application to choose another network.</p></div>
 <div class="step"><span class="num">2</span><p><strong>Verify the card.</strong> Enter its outpoint and WIF. The tool checks that the UTXO exists, is confirmed and unspent, and that the private key matches its P2WPKH output. The WIF remains local and is erased after signing.</p></div>
 <div class="step"><span class="num">3</span><p><strong>Connect Xverse.</strong> Approve the connection and carefully compare the displayed Ordinals address with Xverse. Tick the confirmation only after checking it visually.</p></div>
 <div class="step"><span class="num">4</span><p><strong>Select funding.</strong> Enter a confirmed UTXO belonging to the displayed Xverse payment address. Check independently that it contains no inscription, rune, rare sat, or other asset you need to preserve.</p></div>
 <div class="step"><span class="num">5</span><p><strong>Review the plan.</strong> Choose a fee rate and sign input 0 locally. Confirm that input 0 is the card, output 0 pays the Ordinals address, and both show the same complete card value. The fee must come entirely from input 1.</p></div>
 <div class="step"><span class="num">6</span><p><strong>Sign with Xverse.</strong> Xverse is asked to sign input 1 only. Automatic broadcast is disabled. The returned PSBT is treated as untrusted and checked against the original plan before finalization.</p></div>
 <div class="step"><span class="num">7</span><p><strong>Broadcast separately.</strong> Review or download the final transaction. Type <span class="mono">DIFFUSER</span> only when you are ready to send the exact verified bytes to Bitcoin. Confirm the resulting txid and wait for confirmation.</p></div></section>
+<section><h2>Built-in safety boundaries</h2><ul><li>The local server processes state-changing operations one at a time. Concurrent browser requests cannot interleave the card, wallet, plan, PSBT, or network state.</li><li>The selected network is enforced by the server and remains locked even after sensitive session data expires or is erased.</li><li>The broadcast endpoint accepts only the exact transaction bytes produced by the immediately preceding successful verification.</li><li>The remote txid must match the txid calculated locally before the application reports a successful broadcast.</li></ul></section>
 <section><h2>The four values that must match the plan</h2><ul><li><strong>Input 0:</strong> the card outpoint and its full value.</li><li><strong>Input 1:</strong> the confirmed Xverse payment UTXO.</li><li><strong>Output 0:</strong> the Xverse Ordinals address and the card’s exact full value.</li><li><strong>Output 1:</strong> the Xverse payment/change address and funding value minus fees.</li></ul></section>
 <section><h2>After broadcast</h2><p>Wait for the transaction to confirm. Verify output 0 in a Bitcoin explorer and, when available, in an Ordinals-aware indexer. A confirmed Bitcoin transaction proves that the output exists; an Ordinals-aware check provides additional confirmation that the Rare Sat is present at the expected offset.</p><p class="muted">If any address, amount, network, signature request, or wallet account differs from what you expected, stop. Do not bypass a rejection or weaken a safety check.</p></section>
 <a class="back" href="/?t=__TOKEN__">← Return to Pos Recovery</a></main></body></html>'''
 
 def reset():
-    n=STATE.get("network","mainnet"); STATE.clear(); STATE.update(network=n,ctx=None,wallet=None,plan=None,psbt=None,verified=None,touched=time.monotonic())
+    with STATE_LOCK:
+        n=STATE.get("network","mainnet"); locked=STATE.get("network_locked",False); STATE.clear(); STATE.update(network=n,network_locked=locked,ctx=None,wallet=None,plan=None,psbt=None,verified=None,touched=time.monotonic())
 def touch():
     if time.monotonic()-STATE["touched"]>TTL: reset(); raise core.Refusal("Session expired and was erased.")
     STATE["touched"]=time.monotonic()
 def setnet(n):
+    if not STATE["network_locked"]: raise core.Refusal("Confirm and lock the network first.")
     if n!=STATE["network"]: raise core.Refusal("Network does not match the locked session.")
     core.set_network(n)
+
+def run_route(f,b):
+    """Serialize state and core network access for one complete API operation."""
+    with STATE_LOCK:
+        touch()
+        return f(b)
 
 class Handler(BaseHTTPRequestHandler):
     server_version="pos-recovery"
@@ -80,16 +90,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n=int(self.headers.get("Content-Length","0"))
             if n<0 or n>MAX_BODY:return self.sendx(413,{"error":"request too large"})
-            b=json.loads(self.rfile.read(n) or b"{}");touch();f=ROUTES.get(urlsplit(self.path).path)
+            b=json.loads(self.rfile.read(n) or b"{}");f=ROUTES.get(urlsplit(self.path).path)
             if not f:return self.sendx(404,{"error":"unknown route"})
-            self.sendx(200,f(b))
+            self.sendx(200,run_route(f,b))
         except core.Refusal as e:self.sendx(400,{"error":"Rejected: %s"%e})
         except Exception as e:self.sendx(400,{"error":"Invalid data or unavailable service (%s)."%e.__class__.__name__})
 
 def network(b):
     n=b.get("network");
     if n not in ("signet","mainnet"):raise core.Refusal("Unsupported network.")
-    reset();STATE["network"]=n;core.set_network(n);return {"network":n}
+    if STATE["network_locked"]:raise core.Refusal("Network is already locked for this server session.")
+    reset();STATE["network"]=n;STATE["network_locked"]=True;core.set_network(n);return {"network":n}
 def card(b):
     setnet(b.get("network"));tx,v=core.parse_outpoint(b.get("outpoint",""));u=core.fetch_utxo(core.NETWORKS[STATE["network"]]["api"],tx,v)
     if u["spent"] or u["value"]<=0 or not u["confirmed"]:raise core.Refusal("UTXO is spent, unconfirmed, or has an invalid value.")
