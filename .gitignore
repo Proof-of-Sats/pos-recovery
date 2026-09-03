@@ -1,0 +1,36 @@
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local tooling configuration
+.claude/
+
+# Environment files and potential secrets
+.env
+.env.*
+!.env.example
+*.wif
+*.key
+*.pem
+
+# Generated transaction and runtime artifacts
+*.hex
+context*.json
+*.log
+*.tmp
+*.bak
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
