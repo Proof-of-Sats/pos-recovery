@@ -207,14 +207,29 @@ That transaction confirmed the expected structure: a 1,000-sat card input at
 index 0, a separate Xverse funding input at index 1, a 1,000-sat Ordinals output
 at index 0, Xverse change at index 1, and fees paid entirely by funding.
 
-The operator has also reported a successful Mainnet end-to-end recovery with a
-real rare sat. The Mainnet txid and independent review evidence are not recorded
-in this repository at the time of writing, so this statement should not be
-treated as an external audit or universal safety guarantee.
+The workflow has also been exercised end to end on Bitcoin Mainnet with a real
+Proof of Sats card. The recorded Mainnet validation transaction is:
+
+```text
+e94496a1ff48dc29f4964f038527edecb7b777d4f19be55ded4c13d6e088cd6f
+```
+
+It can be inspected on
+[mempool.space](https://mempool.space/tx/e94496a1ff48dc29f4964f038527edecb7b777d4f19be55ded4c13d6e088cd6f),
+including its
+[Ordinals output 0](https://ordinals.com/output/e94496a1ff48dc29f4964f038527edecb7b777d4f19be55ded4c13d6e088cd6f:0).
+The confirmed transaction contains a 546-sat card input at index 0, a separate
+30,382-sat Xverse funding input at index 1, a 546-sat P2TR Ordinals output at
+index 0, and 30,137 sats of Xverse change at index 1. Its 245-sat mining fee was
+paid entirely by the funding input.
+
+This transaction demonstrates that this specific Mainnet recovery completed
+with the intended structure. It is not an independent security audit or a
+guarantee for every environment, wallet version, fee condition, or user input.
 
 Before publishing a release for broad use, retain evidence for:
 
-- the confirmed Mainnet recovery and Ordinals-aware verification;
+- independent Ordinals-aware verification of Mainnet recoveries;
 - `bitcoin-cli testmempoolaccept` where available;
 - an independent code and transaction review;
 - signed, immutable release artifacts and published SHA-256 hashes.
