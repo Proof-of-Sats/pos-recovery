@@ -274,12 +274,7 @@ workflow. Use the local web interface for the documented Xverse recovery path.
 - `AVERTISSEMENT-ACHETEUR.md` — card-holder warning material;
 - `img/raresatscards-logo.png` — local interface logo.
 
-## Distribution recommendations
-
-Publish the source in a public repository and distribute versioned archives
-through signed, immutable releases. Publish each archive's SHA-256 hash on the
-official Rare Sats Cards website. Do not distribute private builds through
-email, direct messages, or mutable “latest version” links.
+## Recommendations
 
 The application must remain local. Do not turn the WIF workflow into a remotely
 hosted web form.
